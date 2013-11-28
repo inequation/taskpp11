@@ -11,7 +11,7 @@ task_pool::~task_pool()
 
 bool task_pool::try_pop(reference val)
 {
-#if TASKPP11_USE_MUTEXES
+#if TASKPP11_USE_QUEUE_MUTEXES
 	M_mutex.lock();
 	if (M_queue.size())
 	{
@@ -34,14 +34,20 @@ bool task_pool::try_pop(reference val)
 
 void task_pool::flush_tasks()
 {
+	unique_lock(M_resume_mutex);
 	auto workers = M_workers.size();
 	auto expected_fence = M_fence + workers;
 	for (auto i = workers; i > 0; --i)
-		push(task(fence_impl, this));
+		push(fence_impl, this);
 	while (M_fence < expected_fence)
 		std::this_thread::yield();
-	/*for (auto i = workers; i > 0; --i)
-		M_resume.notify_one();*/
+	for (auto i = workers; i > 0; --i)
+		M_resume.notify_one();
+}
+
+void task_pool::flush_tasks(std::function<void (void *)> cb, void *user)
+{
+	std::thread(&task_pool::flush_callback_impl, this, cb, user).detach();
 }
 
 void task_pool::add_workers(size_t count)
@@ -60,22 +66,14 @@ void task_pool::remove_workers(size_t count)
 		
 		auto workers = M_workers.size();
 		auto expected_fence = M_fence + workers;
-		auto kill_params = new kill_param[workers];
 		auto worker_it = M_workers.begin();
 		
 		for (size_t i = 0; i < M_workers.size(); ++i, ++worker_it)
-		{
-			kill_params[i].first = this;
-			kill_params[i].second = &(*worker_it);
-			push(task(kill_fence_impl, &kill_params[i]));
-		}
+			push(kill_fence_impl, this);
 		
 		while (M_fence < expected_fence)
 			std::this_thread::yield();
 		
-		delete [] kill_params;
-		
-		// FIXME: make M_terminate and M_fence atomic?
 		for (auto it = M_workers.begin(); workers > 0; ++it)
 		{
 			if (it == M_workers.end())
@@ -93,17 +91,28 @@ void task_pool::remove_workers(size_t count)
 
 void task_pool::fence_impl(void *arg)
 {
-	auto *pool = (task_pool *)arg;
+	auto pool = (task_pool *)arg;
+	unique_lock lock(pool->M_resume_mutex);
 	++pool->M_fence;
-	//pool->M_resume.wait();
+	pool->M_resume.wait(lock);
 }
 
 void task_pool::kill_fence_impl(void *arg)
 {
-	auto param = (kill_param *)arg;
-	param->second->M_terminate = true;
-	volatile bool *ptr = &(param->second->M_terminate);
-	++param->first->M_fence;
+	auto pool = (task_pool *)arg;
+	const auto id = std::this_thread::get_id();
+	for (auto it = pool->M_workers.begin(); it != pool->M_workers.end(); ++it)
+	{
+		if (it->get_id() == id && !it->M_terminate.exchange(true))
+			break;
+	}
+	++pool->M_fence;
+}
+
+void task_pool::flush_callback_impl(std::function<void (void *)> cb, void *user)
+{
+	flush_tasks();
+	cb(user);
 }
 
 void worker::thread_proc(task_pool *queue)

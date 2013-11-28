@@ -10,20 +10,23 @@
 #include <mutex>
 #include <utility>
 #include <list>
+#include <atomic>
+#include <condition_variable>
 #include <cassert>
 
-#define TASKPP11_USE_MUTEXES	1
+#define TASKPP11_USE_QUEUE_MUTEXES	1
 
 class worker;
 
 class task_pool
 {
 	public:
-		typedef std::pair<std::function<void (void *)>, void *>	task;
+		typedef std::function<void (void *)>		task_function;
+		typedef std::pair<task_function, void *>	task;
 	protected:
-		typedef std::queue<task>								queue;
+		typedef std::queue<task>					queue;
 	public:
-		typedef queue::reference								reference;
+		typedef queue::reference					reference;
 
 		task_pool() : M_fence(0) {}
 		task_pool(size_t pool_size) : M_fence(0) {add_workers(pool_size);}
@@ -31,25 +34,32 @@ class task_pool
 		
 		inline void push(const queue::value_type& val) {M_queue.push(val);}
 		inline void push(queue::value_type&& val) {M_queue.push(val);}
+		inline void push(task_function&& f, void *p) {push(task(f, p));}
 		
 		bool try_pop(reference val);
 		void flush_tasks();
+		void flush_tasks(std::function<void (void *)> callback, void *user);
 		void add_workers(size_t count);
 		void remove_workers(size_t count);
 		
-	protected:
-		typedef std::pair<task_pool *, worker *>				kill_param;
+	private:
+		std::list<worker>							M_workers;
+		std::mutex									M_workers_mutex;
 		
-		std::list<worker>			M_workers;
-		std::mutex					M_workers_mutex;
-		queue						M_queue;
-#if TASKPP11_USE_MUTEXES
-		std::mutex					M_mutex;
+		queue										M_queue;
+#if TASKPP11_USE_QUEUE_MUTEXES
+		std::mutex									M_mutex;
 #endif
-		volatile size_t				M_fence;
+		
+		std::atomic<int>							M_fence;
+		typedef std::unique_lock<std::mutex>		unique_lock;
+		std::mutex									M_resume_mutex;
+		std::condition_variable						M_resume;
 		
 		static void fence_impl(void *arg);
 		static void kill_fence_impl(void *arg);
+		
+		void flush_callback_impl(std::function<void (void *)> cb, void *user);
 };
 
 class worker : private std::thread
@@ -63,7 +73,7 @@ class worker : private std::thread
 	private:
 		friend class task_pool;
 
-		volatile bool M_terminate;
+		std::atomic<bool>							M_terminate;
 
 		void thread_proc(task_pool *queue);
 };
