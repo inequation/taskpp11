@@ -1,7 +1,8 @@
 #include "taskpp11.h"
 #include <cassert>
 
-#include <iostream>
+using namespace std;
+using namespace std::chrono;
 
 task_pool::~task_pool()
 {
@@ -11,48 +12,48 @@ task_pool::~task_pool()
 
 bool task_pool::try_pop(reference val)
 {
-#if TASKPP11_USE_QUEUE_MUTEXES
-	M_mutex.lock();
+	M_queue_lock.lock();
 	if (M_queue.size())
 	{
 		reference ref = M_queue.front();
 		// move the object before popping queue
 		val = ref;
 		M_queue.pop();
-		M_mutex.unlock();
+		M_queue_lock.unlock();
 		return true;
 	}
 	else
 	{
-		M_mutex.unlock();
+		M_queue_lock.unlock();
 		return false;
 	}
-#else
-#	error Lock-free approach is yet unimplemented
-#endif // TASKPP11_USE_MUTEXES
 }
 
-void task_pool::flush_tasks()
+void task_pool::flush_tasks(function<void (void *)> cb, void *user)
 {
-	unique_lock(M_resume_mutex);
+	// we need to lock the worker mutex, because if the number of workers
+	// changes, the fence may not be detected or may be detected prematurely
+	unique_lock(M_workers_mutex);
+	
+	// create a fence structure
 	auto workers = M_workers.size();
-	auto expected_fence = M_fence + workers;
+	auto f = new fence(M_workers.size(), cb, user);
+	
 	for (auto i = workers; i > 0; --i)
-		push(fence_impl, this);
-	while (M_fence < expected_fence)
-		std::this_thread::yield();
-	for (auto i = workers; i > 0; --i)
-		M_resume.notify_one();
-}
-
-void task_pool::flush_tasks(std::function<void (void *)> cb, void *user)
-{
-	std::thread(&task_pool::flush_callback_impl, this, cb, user).detach();
+		push(fence_impl, f);
+	
+	// if a callback was specified, it will be fired by the last worker, and the
+	// fence object will also be freed by that thread
+	if (!cb)
+	{
+		f->wait_for_resume();
+		delete f;
+	}
 }
 
 void task_pool::add_workers(size_t count)
 {
-	std::unique_lock<std::mutex>(M_workers_mutex);
+	unique_lock(M_workers_mutex);
 	//M_workers.reserve(M_workers.size() + count);
 	for (auto i = count; i > 0; --i)
 		M_workers.emplace_back(*this);
@@ -62,17 +63,19 @@ void task_pool::remove_workers(size_t count)
 {
 	if (count > 0)
 	{
-		std::unique_lock<std::mutex>(M_workers_mutex);
+		// we need to lock the worker mutex, because if the number of workers
+		// changes, the fence may not be detected or may be detected prematurely
+		unique_lock(M_workers_mutex);
 		
+		// create a fence structure
 		auto workers = M_workers.size();
-		auto expected_fence = M_fence + workers;
-		auto worker_it = M_workers.begin();
+		auto f = new fence(M_workers.size(), nullptr, this);
 		
-		for (size_t i = 0; i < M_workers.size(); ++i, ++worker_it)
-			push(kill_fence_impl, this);
+		for (auto i = workers; i > 0; --i)
+			push(kill_fence_impl, f);
 		
-		while (M_fence < expected_fence)
-			std::this_thread::yield();
+		f->wait_for_resume();
+		delete f;
 		
 		for (auto it = M_workers.begin(); workers > 0; ++it)
 		{
@@ -91,38 +94,105 @@ void task_pool::remove_workers(size_t count)
 
 void task_pool::fence_impl(void *arg)
 {
-	auto pool = (task_pool *)arg;
-	unique_lock lock(pool->M_resume_mutex);
-	++pool->M_fence;
-	pool->M_resume.wait(lock);
+	auto f = (fence *)arg;
+	if (--f->counter == 0)
+	{
+		// we have zeroed this fence's counter
+		f->resume.notify_all();
+		if (f->callback)
+		{
+			f->callback(f->user);
+			delete f;
+		}
+	}
+	else
+		f->wait_for_resume();
 }
 
 void task_pool::kill_fence_impl(void *arg)
 {
-	auto pool = (task_pool *)arg;
-	const auto id = std::this_thread::get_id();
+	auto f = (fence *)arg;
+	auto pool = (task_pool *)f->user;
+	const auto id = this_thread::get_id();
+	
 	for (auto it = pool->M_workers.begin(); it != pool->M_workers.end(); ++it)
 	{
 		if (it->get_id() == id && !it->M_terminate.exchange(true))
 			break;
 	}
-	++pool->M_fence;
+	
+	if (--f->counter == 0)
+	{
+		// we have zeroed this fence's counter
+		f->resume.notify_all();
+	}
 }
 
-void task_pool::flush_callback_impl(std::function<void (void *)> cb, void *user)
-{
-	flush_tasks();
-	cb(user);
-}
+#if TASKPP11_PROFILING_ENABLED
+	// convenience macro for defining profiling state transitions
+	#define _TASKPP11_CHANGE_STATE(from, to)								\
+		{																	\
+			auto now = high_res_clock::now();								\
+			M_times.from += duration_cast<task_pool::times::duration>		\
+				(now - M_##from##_start);									\
+			M_##from##_start = epoch;										\
+			M_##to##_start = now;											\
+		}
+	
+	// convenience macro for flushing states in progress
+	#define _TASKPP11_FLUSH_STATE(s)										\
+		if (M_##s##_start == epoch)											\
+		{																	\
+			times.s += duration_cast<task_pool::times::duration>			\
+				(now - M_##s##_start);										\
+			M_##s##_start = now;											\
+		}
+
+	void worker::sample_times(task_pool::times& times)
+	{
+		constexpr time_point epoch;
+		constexpr auto zero = task_pool::times::duration::zero();
+		const auto now = high_res_clock::now();
+		times = M_times;
+		M_times.busy = M_times.locking = M_times.idle = zero;
+		_TASKPP11_FLUSH_STATE(idle)
+		else _TASKPP11_FLUSH_STATE(locking)
+		else _TASKPP11_FLUSH_STATE(busy)
+	}
+	
+	void task_pool::sample_times(times *stats)
+	{
+		size_t index = 0;
+		for (auto it = M_workers.begin(); it != M_workers.end(); ++it)
+			it->sample_times(stats[index++]);
+	}
+
+	#undef _TASKPP11_FLUSH_STATE
+#else
+	#define _TASKPP11_CHANGE_STATE(from, to)
+#endif
 
 void worker::thread_proc(task_pool *queue)
 {
+#if TASKPP11_PROFILING_ENABLED
+	// initialize profiling state
+	constexpr time_point epoch;
+	M_idle_start = high_res_clock::now();
+#endif
 	while (!M_terminate)
 	{
 		task_pool::task task;
+		_TASKPP11_CHANGE_STATE(idle, locking)
 		if (queue->try_pop(task))
+		{
+			_TASKPP11_CHANGE_STATE(locking, busy)
 			task.first(task.second);
+			_TASKPP11_CHANGE_STATE(busy, idle)
+		}
 		else
-			std::this_thread::yield();
+		{
+			_TASKPP11_CHANGE_STATE(locking, idle)
+			this_thread::yield();
+		}
 	}
 }
