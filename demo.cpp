@@ -59,10 +59,38 @@ void flushed_callback(void *user)
 	cout << "Flush finished callback! " << user << endl;
 }
 
+void print_profiling_results(const task_pool& pool)
+{
+	auto num_workers = pool.get_worker_count();
+	auto *times = new task_pool::times[num_workers];
+	pool.sample_times(times);
+	cout << "Profiling results:" << endl;
+	for (size_t i = 0; i < num_workers; ++i)
+	{
+		// no point in taking idle time into account since it's usually almost
+		// 100% (?)
+		const auto sum = /*times[i].idle + */times[i].locking + times[i].busy;
+		const auto scale = 1.0 / (double)sum.count();
+		cout << "Thread " << i << ":\t" << fixed
+#if 1
+			//<< (double)times[i].idle.count() * scale << "% idle\t"
+			<< (double)times[i].locking.count() * scale << "% locking\t"
+			<< (double)times[i].busy.count() * scale << "% busy\t"
+#else
+			<< duration_cast<microseconds>(times[i].idle).count() << "ms idle\t"
+			<< duration_cast<microseconds>(times[i].locking).count() << "ms locking\t"
+			<< duration_cast<microseconds>(times[i].busy).count() << "ms busy"
+#endif
+			<< endl;
+	}
+	delete [] times;
+}
+
 int main(int argc, char *argv[])
 {
 	task_pool pool;
 	const size_t num_workers = thread::hardware_concurrency();
+	constexpr size_t task_batch_size = 100;
 	size_t task_index = 0;
 	
 	cout << "Working with " << num_workers << " workers, queue synchronized by "
@@ -76,7 +104,7 @@ int main(int argc, char *argv[])
 	pool.add_workers(num_workers);
 
 	cout << "Issuing tasks..." << endl;
-	for (size_t i = 0; i < 10; ++i)
+	for (size_t i = 0; i < task_batch_size; ++i)
 		pool.push(task_pool::task(print_thread_id, (void *)task_index++));
 	cout << "Issuing tasks done!" << endl;
 
@@ -85,7 +113,7 @@ int main(int argc, char *argv[])
 	cout << "Flushing tasks done!" << endl;
 	
 	cout << "Issuing tasks..." << endl;
-	for (size_t i = 0; i < 10; ++i)
+	for (size_t i = 0; i < task_batch_size; ++i)
 		pool.push(task_pool::task(print_thread_id, (void *)task_index++));
 	cout << "Issuing tasks done!" << endl;
 	
@@ -94,13 +122,15 @@ int main(int argc, char *argv[])
 	pool.flush_tasks(flushed_callback, user_ptr);
 	
 	cout << "Issuing tasks..." << endl;
-	for (size_t i = 0; i < 10; ++i)
+	for (size_t i = 0; i < task_batch_size; ++i)
 		pool.push(task_pool::task(print_thread_id, (void *)task_index++));
 	cout << "Issuing tasks done!" << endl;
 
 	cout << "Sleeping for 500 ms - hopefully this will make the threads start"
 		<< endl;
 	this_thread::sleep_for(milliseconds(500));
+
+	print_profiling_results(pool);
 
 	cout << "Cold-blooded thread murder in progress..." << endl;
 	pool.remove_workers(num_workers);
@@ -110,31 +140,11 @@ int main(int argc, char *argv[])
 	pool.add_workers(num_workers);
 	
 	cout << "Issuing tasks..." << endl;
-	for (size_t i = 0; i < 10; ++i)
+	for (size_t i = 0; i < task_batch_size; ++i)
 		pool.push(task_pool::task(print_thread_id, (void *)task_index++));
 	cout << "Issuing tasks done!" << endl;
 	
 	cout << "Now, task_pool destructor will take care of sync." << endl;
-	
-	auto *times = new task_pool::times[num_workers];
-	pool.sample_times(times);
-	cout << "Profiling results:" << endl;
-	for (size_t i = 0; i < num_workers; ++i)
-	{
-		auto sum = times[i].idle + times[i].locking + times[i].busy;
-		cout << "Thread " << i << ":\t"
-#if 0
-			<< times[i].idle * 100 / sum << "% idle\t"
-			<< times[i].locking * 100 / sum << "% locking\t"
-			<< times[i].busy * 100 / sum << "% busy"
-#else
-			<< duration_cast<microseconds>(times[i].idle).count() << "ms idle\t"
-			<< duration_cast<microseconds>(times[i].locking).count() << "ms locking\t"
-			<< duration_cast<microseconds>(times[i].busy).count() << "ms busy"
-#endif
-			<< endl;
-	}
-	delete [] times;
 	
 	return 0;
 }

@@ -129,45 +129,37 @@ void task_pool::kill_fence_impl(void *arg)
 }
 
 #if TASKPP11_PROFILING_ENABLED
-	// convenience macro for defining profiling state transitions
-	#define _TASKPP11_CHANGE_STATE(from, to)								\
-		{																	\
-			auto now = high_res_clock::now();								\
-			M_times.from += duration_cast<task_pool::times::duration>		\
-				(now - M_##from##_start);									\
-			M_##from##_start = epoch;										\
-			M_##to##_start = now;											\
-		}
-	
-	// convenience macro for flushing states in progress
-	#define _TASKPP11_FLUSH_STATE(s)										\
-		if (M_##s##_start == epoch)											\
-		{																	\
-			times.s += duration_cast<task_pool::times::duration>			\
-				(now - M_##s##_start);										\
-			M_##s##_start = now;											\
-		}
-
-	void worker::sample_times(task_pool::times& times)
+	void worker::sample_times(task_pool::times& times) const
 	{
 		constexpr time_point epoch;
 		constexpr auto zero = task_pool::times::duration::zero();
 		const auto now = high_res_clock::now();
+		M_times_lock.lock();
 		times = M_times;
 		M_times.busy = M_times.locking = M_times.idle = zero;
-		_TASKPP11_FLUSH_STATE(idle)
-		else _TASKPP11_FLUSH_STATE(locking)
-		else _TASKPP11_FLUSH_STATE(busy)
+		for (task_pool::times::states s = task_pool::times::IDLE;
+			s < task_pool::times::MAX_STATES; ++s)
+		{
+			if (M_start_points[s] == epoch)
+			{
+				times.t[s] += duration_cast<task_pool::times::duration>
+					(now - M_start_points[s]);
+				M_start_points[s] = now;
+				break;
+			}
+		}
+		M_times_lock.unlock();
 	}
 	
-	void task_pool::sample_times(times *stats)
+	void task_pool::sample_times(times *stats) const
 	{
 		size_t index = 0;
 		for (auto it = M_workers.begin(); it != M_workers.end(); ++it)
 			it->sample_times(stats[index++]);
 	}
-
-	#undef _TASKPP11_FLUSH_STATE
+	
+	#define _TASKPP11_CHANGE_STATE(from, to)								\
+		change_state<task_pool::times::from, task_pool::times::to>();
 #else
 	#define _TASKPP11_CHANGE_STATE(from, to)
 #endif
@@ -176,22 +168,21 @@ void worker::thread_proc(task_pool *queue)
 {
 #if TASKPP11_PROFILING_ENABLED
 	// initialize profiling state
-	constexpr time_point epoch;
 	M_idle_start = high_res_clock::now();
 #endif
 	while (!M_terminate)
 	{
 		task_pool::task task;
-		_TASKPP11_CHANGE_STATE(idle, locking)
+		_TASKPP11_CHANGE_STATE(IDLE, LOCKING)
 		if (queue->try_pop(task))
 		{
-			_TASKPP11_CHANGE_STATE(locking, busy)
+			_TASKPP11_CHANGE_STATE(LOCKING, BUSY)
 			task.first(task.second);
-			_TASKPP11_CHANGE_STATE(busy, idle)
+			_TASKPP11_CHANGE_STATE(BUSY, IDLE)
 		}
 		else
 		{
-			_TASKPP11_CHANGE_STATE(locking, idle)
+			_TASKPP11_CHANGE_STATE(LOCKING, IDLE)
 			this_thread::yield();
 		}
 	}

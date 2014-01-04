@@ -61,36 +61,10 @@ class task_pool
 			void *user = nullptr);
 		void add_workers(size_t count);
 		void remove_workers(size_t count);
-		size_t get_worker_count() { return M_workers.size(); }
+		size_t get_worker_count() const { return M_workers.size(); }
 		
-#if TASKPP11_PROFILING_ENABLED
-		struct times
-		{
-			typedef std::chrono::high_resolution_clock::duration	duration;
-			duration								idle, locking, busy;
-			times()
-				: idle(duration::zero())
-				, locking(duration::zero())
-				, busy(duration::zero())
-			{}
-		};
-		// this samples the current time stats for all workers, then resets
-		// them; stats is user-provided memory, expected to be large enough to
-		// accomodate get_worker_count() of times struct instances
-		void sample_times(times *stats);
-#endif
-		
-	private:
-		std::list<worker>							M_workers;
-		std::mutex									M_workers_mutex;
-		
-#if TASKPP11_USE_QUEUE_MUTEX
-		// queue access synchronization using a mutex (i.e. threads waiting for
-		// lock will go to sleep while waiting)
-		typedef std::mutex							queue_lock;
-#else
-		// queue access synchronization using a spinlock (i.e. threads waiting
-		// for lock will keep spinning until they can lock)
+		// utility class of a synchronization primitive that has the threads
+		// attempting to lock spinning instead of sleeping
 		class spinlock
 		{
 			public:
@@ -106,6 +80,43 @@ class task_pool
 			private:
 				std::atomic<bool> M_lock;
 		};
+		
+#if TASKPP11_PROFILING_ENABLED
+		struct times
+		{
+			typedef std::chrono::high_resolution_clock::duration	duration;
+			enum states { IDLE, LOCKING, BUSY, MAX_STATES };
+			union
+			{
+				struct
+				{
+					duration						idle, locking, busy;
+				};
+				duration							t[MAX_STATES];
+			};
+			times()
+				: idle(duration::zero())
+				, locking(duration::zero())
+				, busy(duration::zero())
+			{}
+		};
+		// this samples the current time stats for all workers, then resets
+		// them; stats is user-provided memory, expected to be large enough to
+		// accomodate get_worker_count() of times struct instances
+		void sample_times(times *stats) const;
+#endif
+		
+	private:
+		std::list<worker>							M_workers;
+		std::mutex									M_workers_mutex;
+		
+#if TASKPP11_USE_QUEUE_MUTEX
+		// queue access synchronization using a mutex (i.e. threads waiting for
+		// lock will go to sleep while waiting)
+		typedef std::mutex							queue_lock;
+#else
+		// queue access synchronization using a spinlock (i.e. threads waiting
+		// for lock will keep spinning until they can lock)
 		typedef spinlock							queue_lock;
 #endif
 		queue_lock									M_queue_lock;
@@ -161,10 +172,20 @@ class worker : private std::thread
 #if TASKPP11_PROFILING_ENABLED
 	typedef std::chrono::high_resolution_clock	high_res_clock;
 	typedef high_res_clock::time_point			time_point;
-	time_point									M_idle_start,
+	union
+	{
+		struct
+		{
+			mutable time_point					M_idle_start,
 												M_locking_start,
 												M_busy_start;
-	task_pool::times							M_times;
+		};
+		mutable time_point						M_start_points[
+													task_pool::times::MAX_STATES
+												];
+	};
+	mutable task_pool::times					M_times;
+	mutable task_pool::spinlock					M_times_lock;
 #endif
 
 	public:
@@ -179,7 +200,20 @@ class worker : private std::thread
 		{}
 
 #if TASKPP11_PROFILING_ENABLED
-		void sample_times(task_pool::times& times);
+		void sample_times(task_pool::times& times) const;
+		
+		template<task_pool::times::states from, task_pool::times::states to>
+		inline void change_state()
+		{
+			constexpr time_point epoch;
+			auto now = high_res_clock::now();
+			M_times_lock.lock();
+			M_times.t[from] += std::chrono::duration_cast
+				<task_pool::times::duration>(now - M_start_points[from]);
+			M_start_points[from] = epoch;
+			M_start_points[to] = now;
+			M_times_lock.unlock();
+		}
 #endif
 
 	private:
