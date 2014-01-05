@@ -54,11 +54,6 @@ void print_thread_id(void *arg)
 	}
 }
 
-void flushed_callback(void *user)
-{
-	cout << "Flush finished callback! " << user << endl;
-}
-
 void print_profiling_results(const task_pool& pool)
 {
 	auto num_workers = pool.get_worker_count();
@@ -67,23 +62,25 @@ void print_profiling_results(const task_pool& pool)
 	cout << "Profiling results:" << endl;
 	for (size_t i = 0; i < num_workers; ++i)
 	{
-		// no point in taking idle time into account since it's usually almost
-		// 100% (?)
-		const auto sum = /*times[i].idle + */times[i].locking + times[i].busy;
-		const auto scale = 1.0 / (double)sum.count();
+		const auto sum = times[i].idle + times[i].locking + times[i].busy;
+		const auto scale = 100.0 / (double)sum.count();
 		cout << "Thread " << i << ":\t" << fixed
-#if 1
-			//<< (double)times[i].idle.count() * scale << "% idle\t"
+			<< (double)times[i].idle.count() * scale << "% idle\t"
 			<< (double)times[i].locking.count() * scale << "% locking\t"
-			<< (double)times[i].busy.count() * scale << "% busy\t"
-#else
-			<< duration_cast<microseconds>(times[i].idle).count() << "ms idle\t"
-			<< duration_cast<microseconds>(times[i].locking).count() << "ms locking\t"
-			<< duration_cast<microseconds>(times[i].busy).count() << "ms busy"
-#endif
+			<< (double)times[i].busy.count() * scale << "% busy"
+			<< " (times: "
+			<< duration_cast<duration<double, milli>>(times[i].idle).count() << "ms idle, "
+			<< duration_cast<duration<double, milli>>(times[i].locking).count() << "ms locking, "
+			<< duration_cast<duration<double, milli>>(times[i].busy).count() << "ms busy)"
 			<< endl;
 	}
 	delete [] times;
+}
+
+void flushed_callback(void *user)
+{
+	cout << "Flush finished callback! " << user << endl;
+	print_profiling_results(*(task_pool *)user);
 }
 
 int main(int argc, char *argv[])
@@ -117,7 +114,7 @@ int main(int argc, char *argv[])
 		pool.push(task_pool::task(print_thread_id, (void *)task_index++));
 	cout << "Issuing tasks done!" << endl;
 	
-	void *user_ptr = (void *)0xDEADBEEF;
+	void *user_ptr = (void *)&pool;
 	cout << "Flushing tasks with callback " << user_ptr << endl;
 	pool.flush_tasks(flushed_callback, user_ptr);
 	
@@ -129,8 +126,6 @@ int main(int argc, char *argv[])
 	cout << "Sleeping for 500 ms - hopefully this will make the threads start"
 		<< endl;
 	this_thread::sleep_for(milliseconds(500));
-
-	print_profiling_results(pool);
 
 	cout << "Cold-blooded thread murder in progress..." << endl;
 	pool.remove_workers(num_workers);

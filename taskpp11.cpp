@@ -140,7 +140,7 @@ void task_pool::kill_fence_impl(void *arg)
 		for (task_pool::times::states s = task_pool::times::IDLE;
 			s < task_pool::times::MAX_STATES; ++s)
 		{
-			if (M_start_points[s] == epoch)
+			if (M_start_points[s] != epoch)
 			{
 				times.t[s] += duration_cast<task_pool::times::duration>
 					(now - M_start_points[s]);
@@ -170,9 +170,9 @@ void worker::thread_proc(task_pool *queue)
 	// initialize profiling state
 	M_idle_start = high_res_clock::now();
 #endif
+	task_pool::task task;
 	while (!M_terminate)
 	{
-		task_pool::task task;
 		_TASKPP11_CHANGE_STATE(IDLE, LOCKING)
 		if (queue->try_pop(task))
 		{
@@ -183,7 +183,9 @@ void worker::thread_proc(task_pool *queue)
 		else
 		{
 			_TASKPP11_CHANGE_STATE(LOCKING, IDLE)
+#if TASKPP11_YIELD_WHEN_IDLE
 			this_thread::yield();
+#endif
 		}
 	}
 }

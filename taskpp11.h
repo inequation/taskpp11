@@ -22,6 +22,11 @@
 // define this to 1 to enable profiling
 #define TASKPP11_PROFILING_ENABLED	1
 
+// define this to 1 to enable workers yielding CPU time after finding the queue
+// empty; 0 will make them spin until a task comes up or the OS scheduler
+// switches context
+#define TASKPP11_YIELD_WHEN_IDLE	1
+
 #if TASKPP11_PROFILING_ENABLED
 	#include <chrono>
 #endif
@@ -130,7 +135,7 @@ class task_pool
 			std::function<void (void *)>			callback;
 			void									*user;
 			
-			std::atomic<int>						counter;
+			std::atomic<size_t>						counter;
 			std::mutex								resume_mutex;
 			std::condition_variable					resume;
 			
