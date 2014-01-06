@@ -91,6 +91,16 @@ class task_pool
 				bool is_locked() { return M_lock; }
 			private:
 				volatile bool						M_lock;
+	#elif defined(_MSC_VER)
+				spinlock() : M_lock(FALSE) {}
+				void lock()
+				{
+					while (!InterlockedCompareExchange(&M_lock, TRUE, FALSE));
+				}
+				void unlock() { M_lock = false; }
+				bool is_locked() { return M_lock; }
+			private:
+				volatile BOOL						M_lock;
 	#else
 		#error Please define the spinlock for non-gcc compilers
 	#endif
