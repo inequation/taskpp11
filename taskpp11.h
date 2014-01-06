@@ -13,7 +13,6 @@
 #include <vector>
 #include <atomic>
 #include <condition_variable>
-#include <cassert>
 
 // define this to 1 to use a mutex for queue access synchronization - it allows
 // for easier algorithm sanity/correctness checking, but is less performant
