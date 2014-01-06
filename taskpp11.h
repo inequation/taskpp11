@@ -43,6 +43,71 @@ namespace taskpp11
 
 class worker;
 
+// utility class of a synchronization primitive that has the threads
+// attempting to lock spinning instead of sleeping
+class spinlock
+{
+	public:
+#if TASKPP11_SPINLOCK_NATIVE
+	#if __GNUC__
+		spinlock() : M_lock(false) {}
+		void lock()
+		{
+			while (!__sync_bool_compare_and_swap(&M_lock, false, true));
+		}
+		void unlock() { M_lock = false; }
+		bool is_locked() { return M_lock; }
+	private:
+		volatile bool						M_lock;
+	#elif defined(_MSC_VER)
+		spinlock() : M_lock(FALSE) {}
+		void lock()
+		{
+			while (!InterlockedCompareExchange(&M_lock, TRUE, FALSE));
+		}
+		void unlock() { M_lock = false; }
+		bool is_locked() { return M_lock; }
+	private:
+		volatile BOOL						M_lock;
+	#else
+		#error Please define the spinlock for this compiler
+	#endif
+#else
+		spinlock() : M_lock(false) {}
+		void lock()
+		{
+			bool expected = false;
+			while (!M_lock.compare_exchange_weak(expected, true))
+				expected = false;
+		}
+		void unlock() { M_lock = false; }
+		bool is_locked() { return M_lock; }
+	private:
+		std::atomic<bool>					M_lock;
+#endif
+};
+
+#if TASKPP11_PROFILING_ENABLED
+// utility struct that holds the profiling times
+union times
+{
+	typedef std::chrono::high_resolution_clock::duration	duration;
+	enum states { IDLE, LOCKING, BUSY, MAX_STATES };
+	
+	struct named	// shut up, g++
+	{
+		duration						idle, locking, busy;
+	};
+	named								n;
+	duration							t[MAX_STATES];
+		
+	times()
+		: t{duration::zero(), duration::zero(), duration::zero()}
+	{}
+};
+#endif
+
+// actual task pool class
 class task_pool
 {
 	public:
@@ -78,69 +143,7 @@ class task_pool
 		void remove_workers(size_t count);
 		size_t get_worker_count() const { return M_workers.size(); }
 		
-		// utility class of a synchronization primitive that has the threads
-		// attempting to lock spinning instead of sleeping
-		class spinlock
-		{
-			public:
-#if TASKPP11_SPINLOCK_NATIVE
-	#if __GNUC__
-				spinlock() : M_lock(false) {}
-				void lock()
-				{
-					while (!__sync_bool_compare_and_swap(&M_lock, false, true));
-				}
-				void unlock() { M_lock = false; }
-				bool is_locked() { return M_lock; }
-			private:
-				volatile bool						M_lock;
-	#elif defined(_MSC_VER)
-				spinlock() : M_lock(FALSE) {}
-				void lock()
-				{
-					while (!InterlockedCompareExchange(&M_lock, TRUE, FALSE));
-				}
-				void unlock() { M_lock = false; }
-				bool is_locked() { return M_lock; }
-			private:
-				volatile BOOL						M_lock;
-	#else
-		#error Please define the spinlock for non-gcc compilers
-	#endif
-#else
-				spinlock() : M_lock(false) {}
-				void lock()
-				{
-					bool expected = false;
-					while (!M_lock.compare_exchange_weak(expected, true))
-						expected = false;
-				}
-				void unlock() { M_lock = false; }
-				bool is_locked() { return M_lock; }
-			private:
-				std::atomic<bool>					M_lock;
-#endif
-		};
-		
 #if TASKPP11_PROFILING_ENABLED
-		struct times
-		{
-			typedef std::chrono::high_resolution_clock::duration	duration;
-			enum states { IDLE, LOCKING, BUSY, MAX_STATES };
-			union
-			{
-				struct
-				{
-					duration						idle, locking, busy;
-				};
-				duration							t[MAX_STATES];
-			};
-			times()
-				: idle(duration::zero())
-				, locking(duration::zero())
-				, busy(duration::zero())
-			{}
-		};
 		// this samples the current time stats for all workers, then resets
 		// them; stats is user-provided memory, expected to be large enough to
 		// accomodate get_worker_count() of times struct instances
@@ -213,46 +216,45 @@ class worker : private std::thread
 #if TASKPP11_PROFILING_ENABLED
 	typedef std::chrono::high_resolution_clock	high_res_clock;
 	typedef high_res_clock::time_point			time_point;
-	union
+	union start_points
 	{
-		struct
+		struct named	// shut up, g++
 		{
-			mutable time_point					M_idle_start,
-												M_locking_start,
-												M_busy_start;
+			mutable time_point					idle,
+												locking,
+												busy;
 		};
-		mutable time_point						M_start_points[
-													task_pool::times::MAX_STATES
-												];
+		mutable named							n;
+		mutable time_point						t[times::MAX_STATES];
+		
+		start_points()
+			: t{time_point(), time_point(), time_point()}
+		{}
 	};
-	mutable task_pool::times					M_times;
-	mutable task_pool::spinlock					M_times_lock;
+	mutable start_points						M_start_points;
+	mutable times								M_times;
+	mutable spinlock							M_times_lock;
 #endif
 
 	public:
 		explicit worker(task_pool& in_task_pool)
 			: std::thread(&worker::thread_proc, this, &in_task_pool)
 			, M_terminate(false)
-#if TASKPP11_PROFILING_ENABLED
-			, M_idle_start(high_res_clock::duration::zero())
-			, M_locking_start(high_res_clock::duration::zero())
-			, M_busy_start(high_res_clock::duration::zero())
-#endif
 		{}
 
 #if TASKPP11_PROFILING_ENABLED
-		void sample_times(task_pool::times& times) const;
+		void sample_times(times& times) const;
 		
-		template<task_pool::times::states from, task_pool::times::states to>
+		template<times::states from, times::states to>
 		inline void change_state()
 		{
 			constexpr time_point epoch;
 			auto now = high_res_clock::now();
 			M_times_lock.lock();
 			M_times.t[from] += std::chrono::duration_cast
-				<task_pool::times::duration>(now - M_start_points[from]);
-			M_start_points[from] = epoch;
-			M_start_points[to] = now;
+				<times::duration>(now - M_start_points.t[from]);
+			M_start_points.t[from] = epoch;
+			M_start_points.t[to] = now;
 			M_times_lock.unlock();
 		}
 #endif

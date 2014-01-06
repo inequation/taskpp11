@@ -58,40 +58,40 @@ void print_thread_id(void *arg)
 void print_profiling_results(const task_pool& pool)
 {
 	auto num_workers = pool.get_worker_count();
-	auto *times = new task_pool::times[num_workers];
-	task_pool::times average;
+	auto *times = new taskpp11::times[num_workers];
+	taskpp11::times average;
 	pool.sample_times(times);
 	cout << "Profiling results:" << endl;
 	for (size_t i = 0; i < num_workers; ++i)
 	{
-		const auto sum = times[i].idle + times[i].locking + times[i].busy;
+		const auto sum = times[i].n.idle + times[i].n.locking + times[i].n.busy;
 		const auto scale = 100.0 / (double)sum.count();
 		cout << "Thread " << i << ":\t" << fixed
-			<< (double)times[i].idle.count() * scale << "% idle\t"
-			<< (double)times[i].locking.count() * scale << "% locking\t"
-			<< (double)times[i].busy.count() * scale << "% busy"
+			<< (double)times[i].n.idle.count() * scale << "% idle\t"
+			<< (double)times[i].n.locking.count() * scale << "% locking\t"
+			<< (double)times[i].n.busy.count() * scale << "% busy"
 			<< " (times: "
-			<< duration_cast<duration<double, milli>>(times[i].idle).count() << "ms idle, "
-			<< duration_cast<duration<double, milli>>(times[i].locking).count() << "ms locking, "
-			<< duration_cast<duration<double, milli>>(times[i].busy).count() << "ms busy)"
+			<< duration_cast<duration<double, milli>>(times[i].n.idle).count() << "ms idle, "
+			<< duration_cast<duration<double, milli>>(times[i].n.locking).count() << "ms locking, "
+			<< duration_cast<duration<double, milli>>(times[i].n.busy).count() << "ms busy)"
 			<< endl;
-		average.idle += times[i].idle;
-		average.locking += times[i].locking;
-		average.busy += times[i].busy;
+		average.n.idle += times[i].n.idle;
+		average.n.locking += times[i].n.locking;
+		average.n.busy += times[i].n.busy;
 	}
-	average.idle /= num_workers;
-	average.locking /= num_workers;
-	average.busy /= num_workers;
-	const auto sum = average.idle + average.locking + average.busy;
+	average.n.idle /= num_workers;
+	average.n.locking /= num_workers;
+	average.n.busy /= num_workers;
+	const auto sum = average.n.idle + average.n.locking + average.n.busy;
 	const auto scale = 100.0 / (double)sum.count();
 	cout << "Averages:\t" << fixed
-		<< (double)average.idle.count() * scale << "% idle\t"
-		<< (double)average.locking.count() * scale << "% locking\t"
-		<< (double)average.busy.count() * scale << "% busy"
+		<< (double)average.n.idle.count() * scale << "% idle\t"
+		<< (double)average.n.locking.count() * scale << "% locking\t"
+		<< (double)average.n.busy.count() * scale << "% busy"
 		<< " (times: "
-		<< duration_cast<duration<double, milli>>(average.idle).count() << "ms idle, "
-		<< duration_cast<duration<double, milli>>(average.locking).count() << "ms locking, "
-		<< duration_cast<duration<double, milli>>(average.busy).count() << "ms busy)"
+		<< duration_cast<duration<double, milli>>(average.n.idle).count() << "ms idle, "
+		<< duration_cast<duration<double, milli>>(average.n.locking).count() << "ms locking, "
+		<< duration_cast<duration<double, milli>>(average.n.busy).count() << "ms busy)"
 		<< endl;
 	delete [] times;
 }

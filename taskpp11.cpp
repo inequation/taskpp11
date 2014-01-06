@@ -133,22 +133,30 @@ void task_pool::kill_fence_impl(void *arg)
 }
 
 #if TASKPP11_PROFILING_ENABLED
-	void worker::sample_times(task_pool::times& times) const
+	void worker::sample_times(times& times) const
 	{
+		// convenience constants
 		constexpr time_point epoch;
-		constexpr auto zero = task_pool::times::duration::zero();
+		constexpr auto zero = times::duration::zero();
+		
+		// sample time at entry
 		const auto now = high_res_clock::now();
+		// sync
 		M_times_lock.lock();
+		// copy internal counters
 		times = M_times;
-		M_times.busy = M_times.locking = M_times.idle = zero;
-		for (task_pool::times::states s = task_pool::times::IDLE;
-			s < task_pool::times::MAX_STATES; ++s)
+		// clear internal counters
+		M_times.n.busy = M_times.n.locking = M_times.n.idle = zero;
+		// flush (restart) the current state and add its elapsed time to the
+		// counters
+		for (times::states s = times::IDLE;
+			s < times::MAX_STATES; s = (times::states)(s + 1))
 		{
-			if (M_start_points[s] != epoch)
+			if (M_start_points.t[s] != epoch)
 			{
-				times.t[s] += duration_cast<task_pool::times::duration>
-					(now - M_start_points[s]);
-				M_start_points[s] = now;
+				times.t[s] += duration_cast<times::duration>
+					(now - M_start_points.t[s]);
+				M_start_points.t[s] = now;
 				break;
 			}
 		}
@@ -163,7 +171,7 @@ void task_pool::kill_fence_impl(void *arg)
 	}
 	
 	#define _TASKPP11_CHANGE_STATE(from, to)								\
-		change_state<task_pool::times::from, task_pool::times::to>();
+		change_state<times::from, times::to>();
 #else
 	#define _TASKPP11_CHANGE_STATE(from, to)
 #endif
@@ -172,7 +180,7 @@ void worker::thread_proc(task_pool *queue)
 {
 #if TASKPP11_PROFILING_ENABLED
 	// initialize profiling state
-	M_idle_start = high_res_clock::now();
+	M_start_points.n.idle = high_res_clock::now();
 #endif
 	task_pool::task task;
 	while (!M_terminate)
