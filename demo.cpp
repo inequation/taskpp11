@@ -113,9 +113,19 @@ int main(int argc, char *argv[])
 #if TASKPP11_USE_QUEUE_MUTEX
 		"mutex"
 #else
-		"spinlock"
+	#if TASKPP11_SPINLOCK_NATIVE
+		"native spinlock"
+	#else
+		"std::atomic spinlock"
+	#endif
 #endif
-		<< endl;
+		", workers "
+#if TASKPP11_YIELD_WHEN_IDLE
+		"yielding"
+#else
+		"not yielding"
+#endif
+		" CPU time when idle" << endl;
 	
 	pool.add_workers(num_workers);
 
