@@ -117,8 +117,11 @@ void task_pool::kill_fence_impl(void *arg)
 	
 	for (auto it = pool->M_workers.begin(); it != pool->M_workers.end(); ++it)
 	{
-		if (it->get_id() == id && !it->M_terminate.exchange(true))
+		if (it->get_id() == id)
+		{
+			it->M_terminate = true;
 			break;
+		}
 	}
 	
 	if (--f->counter == 0)

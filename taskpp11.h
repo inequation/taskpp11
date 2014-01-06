@@ -25,7 +25,7 @@
 // define this to 1 to enable workers yielding CPU time after finding the queue
 // empty; 0 will make them spin until a task comes up or the OS scheduler
 // switches context
-#define TASKPP11_YIELD_WHEN_IDLE	0
+#define TASKPP11_YIELD_WHEN_IDLE	1
 
 // define this to 1 to use native atomic intrinsics for the spinlock
 #define TASKPP11_SPINLOCK_NATIVE	1
@@ -247,7 +247,7 @@ class worker : private std::thread
 	private:
 		friend class task_pool;
 
-		std::atomic<bool>							M_terminate;
+		bool									M_terminate;
 
 		void thread_proc(task_pool *queue);
 };
