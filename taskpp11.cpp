@@ -3,6 +3,7 @@
 
 using namespace std;
 using namespace std::chrono;
+using namespace taskpp11;
 
 task_pool::~task_pool()
 {

@@ -38,6 +38,9 @@
 	#include <chrono>
 #endif
 
+namespace taskpp11
+{
+
 class worker;
 
 class task_pool
@@ -261,3 +264,5 @@ class worker : private std::thread
 
 		void thread_proc(task_pool *queue);
 };
+
+}	// namespace taskpp11
