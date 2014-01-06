@@ -25,7 +25,14 @@
 // define this to 1 to enable workers yielding CPU time after finding the queue
 // empty; 0 will make them spin until a task comes up or the OS scheduler
 // switches context
-#define TASKPP11_YIELD_WHEN_IDLE	1
+#define TASKPP11_YIELD_WHEN_IDLE	0
+
+// define this to 1 to use native atomic intrinsics for the spinlock
+#define TASKPP11_SPINLOCK_NATIVE	1
+
+#if !TASKPP11_USE_QUEUE_MUTEX && !TASKPP11_YIELD_WHEN_IDLE
+	#warning Spinlock for queue and not yielding may cause bad performance
+#endif
 
 #if TASKPP11_PROFILING_ENABLED
 	#include <chrono>
@@ -73,6 +80,21 @@ class task_pool
 		class spinlock
 		{
 			public:
+#if TASKPP11_SPINLOCK_NATIVE
+	#if __GNUC__
+				spinlock() : M_lock(false) {}
+				void lock()
+				{
+					while (!__sync_bool_compare_and_swap(&M_lock, false, true));
+				}
+				void unlock() { M_lock = false; }
+				bool is_locked() { return M_lock; }
+			private:
+				volatile bool						M_lock;
+	#else
+		#error Please define the spinlock for non-gcc compilers
+	#endif
+#else
 				spinlock() : M_lock(false) {}
 				void lock()
 				{
@@ -83,7 +105,8 @@ class task_pool
 				void unlock() { M_lock = false; }
 				bool is_locked() { return M_lock; }
 			private:
-				std::atomic<bool> M_lock;
+				std::atomic<bool>					M_lock;
+#endif
 		};
 		
 #if TASKPP11_PROFILING_ENABLED
