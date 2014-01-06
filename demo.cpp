@@ -58,6 +58,7 @@ void print_profiling_results(const task_pool& pool)
 {
 	auto num_workers = pool.get_worker_count();
 	auto *times = new task_pool::times[num_workers];
+	task_pool::times average;
 	pool.sample_times(times);
 	cout << "Profiling results:" << endl;
 	for (size_t i = 0; i < num_workers; ++i)
@@ -73,7 +74,24 @@ void print_profiling_results(const task_pool& pool)
 			<< duration_cast<duration<double, milli>>(times[i].locking).count() << "ms locking, "
 			<< duration_cast<duration<double, milli>>(times[i].busy).count() << "ms busy)"
 			<< endl;
+		average.idle += times[i].idle;
+		average.locking += times[i].locking;
+		average.busy += times[i].busy;
 	}
+	average.idle /= num_workers;
+	average.locking /= num_workers;
+	average.busy /= num_workers;
+	const auto sum = average.idle + average.locking + average.busy;
+	const auto scale = 100.0 / (double)sum.count();
+	cout << "Averages:\t" << fixed
+		<< (double)average.idle.count() * scale << "% idle\t"
+		<< (double)average.locking.count() * scale << "% locking\t"
+		<< (double)average.busy.count() * scale << "% busy"
+		<< " (times: "
+		<< duration_cast<duration<double, milli>>(average.idle).count() << "ms idle, "
+		<< duration_cast<duration<double, milli>>(average.locking).count() << "ms locking, "
+		<< duration_cast<duration<double, milli>>(average.busy).count() << "ms busy)"
+		<< endl;
 	delete [] times;
 }
 
