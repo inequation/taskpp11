@@ -16,7 +16,7 @@
 
 // define this to 1 to use a mutex for queue access synchronization - it allows
 // for easier algorithm sanity/correctness checking, but is less performant
-#define TASKPP11_USE_QUEUE_MUTEX	1
+#define TASKPP11_USE_QUEUE_MUTEX	0
 
 // define this to 1 to enable profiling
 #define TASKPP11_PROFILING_ENABLED	1
