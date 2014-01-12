@@ -16,7 +16,7 @@
 
 // define this to 1 to use a mutex for queue access synchronization - it allows
 // for easier algorithm sanity/correctness checking, but is less performant
-#define TASKPP11_USE_QUEUE_MUTEX	0
+#define TASKPP11_USE_QUEUE_MUTEX	1
 
 // define this to 1 to enable profiling
 #define TASKPP11_PROFILING_ENABLED	1
@@ -173,7 +173,7 @@ class task_pool
 			std::function<void (void *)>			callback;
 			void									*user;
 			
-			std::atomic<size_t>						counter;
+			size_t									counter;
 			std::mutex								resume_mutex;
 			std::condition_variable					resume;
 			
@@ -195,12 +195,6 @@ class task_pool
 				, user(other.user)
 				, counter(static_cast<int>(other.counter))
 			{}
-			
-			inline void wait_for_resume()
-			{
-				unique_lock lock(resume_mutex);
-				resume.wait(lock);
-			}
 		};
 		typedef std::vector<fence>					fence_vector;
 		

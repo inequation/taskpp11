@@ -47,7 +47,8 @@ void task_pool::flush_tasks(function<void (void *)> cb, void *user)
 	// fence object will also be freed by that thread
 	if (!cb)
 	{
-		f->wait_for_resume();
+		unique_lock lock(f->resume_mutex);
+		f->resume.wait(lock, [&f](){return f->counter == 0;});
 		delete f;
 	}
 }
@@ -72,10 +73,12 @@ void task_pool::remove_workers(size_t count)
 		auto workers = M_workers.size();
 		auto f = new fence(M_workers.size(), nullptr, this);
 		
+		unique_lock lock(f->resume_mutex);
+		
 		for (auto i = workers; i > 0; --i)
 			push(kill_fence_impl, f);
 		
-		f->wait_for_resume();
+		f->resume.wait(lock, [&f](){return f->counter == 0;});
 		delete f;
 		
 		for (auto it = M_workers.begin(); workers > 0; ++it)
@@ -96,9 +99,10 @@ void task_pool::remove_workers(size_t count)
 void task_pool::fence_impl(void *arg)
 {
 	auto f = (fence *)arg;
+	unique_lock lock(f->resume_mutex);
 	if (--f->counter == 0)
 	{
-		// we have zeroed this fence's counter
+		// we have zeroed this fence's counter, wake up everyone that waits
 		f->resume.notify_all();
 		if (f->callback)
 		{
@@ -107,7 +111,7 @@ void task_pool::fence_impl(void *arg)
 		}
 	}
 	else
-		f->wait_for_resume();
+		f->resume.wait(lock, [&f](){return f->counter == 0;});
 }
 
 void task_pool::kill_fence_impl(void *arg)
@@ -128,6 +132,7 @@ void task_pool::kill_fence_impl(void *arg)
 	if (--f->counter == 0)
 	{
 		// we have zeroed this fence's counter
+		unique_lock lock(f->resume_mutex);
 		f->resume.notify_all();
 	}
 }

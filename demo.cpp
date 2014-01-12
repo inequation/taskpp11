@@ -237,12 +237,17 @@ int main(int argc, char *argv[])
 			vec.emplace_back(rand());
 		
 		// find the maximum serially for correctness check
+		high_resolution_clock::time_point t1 = high_resolution_clock::now();
 		sorted_vector::value_type max = vec[0];
 		for (auto it = vec.begin(); it != vec.end(); ++it)
 		{
 			if (max < *it)
 				max = *it;
 		}
+		high_resolution_clock::time_point t2 = high_resolution_clock::now();
+		cout << "Serial result: "
+			<< (duration_cast<duration<double, milli>>(t2 - t1)).count()
+			<< "ms" << endl;
 		
 		// divide & conquer!
 		pool.add_workers(num_workers);
