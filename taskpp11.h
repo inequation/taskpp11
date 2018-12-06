@@ -1,6 +1,6 @@
 #pragma once
 
-#if __cplusplus <= 199711L
+#if __cplusplus < 201103L && (!defined(_MSC_VER) || _MSC_VER < 1900)
 #	error This library requires C++11 support.
 #endif
 
@@ -37,6 +37,13 @@
 	#include <chrono>
 #endif
 
+#if TASKPP11_SPINLOCK_NATIVE && defined(_WIN32)
+	#define WIN32_LEAN_AND_MEAN
+	#define NOMINMAX
+	#include <Windows.h>
+	#include <cstdint>
+#endif
+
 namespace taskpp11
 {
 
@@ -67,7 +74,7 @@ class spinlock
 		void unlock() { M_lock = false; }
 		bool is_locked() { return M_lock; }
 	private:
-		volatile BOOL						M_lock;
+		volatile uint32_t					M_lock;
 	#else
 		#error Please define the spinlock for this compiler
 	#endif
